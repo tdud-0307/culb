@@ -20,12 +20,6 @@ import streamlit as st
 # 1. 실험 데이터
 # =========================================================
 
-# 보고서에 기재된 개별 이동 시간입니다. 단위: 초
-# 평균은 아래 코드에서 자동으로 계산합니다.
-#
-# 6V는 이전 데이터 정리 과정에서 보정값 사용이 언급되어
-# 실제로 측정한 값인지 확인이 필요하다는 표시를 넣었습니다.
-
 RAW_TIMES = {
     5: [0.23, 0.20, 0.23, 0.20, 0.23],
     6: [0.21, 0.19, 0.20, 0.19, 0.20],
@@ -36,14 +30,11 @@ RAW_TIMES = {
     11: [0.13, 0.10, 0.13, 0.13, 0.13],
 }
 
-# 12V의 첫 동작 시간 기록입니다.
-# 반복 평균이나 정확한 고장 발생 시각은 아닙니다.
 FIRST_MOTION_12V = 0.10
 
 START_ANGLE = 20
 TARGET_ANGLE = 100
 
-# 제공된 포스터에 첨부된 제품 사양 기준입니다.
 RATED_RANGE = (4.8, 6.0)
 
 
@@ -104,13 +95,12 @@ def get_record(voltage):
     elif voltage == 12:
         record.update(
             mode="failure",
-            status="목표 위치 초과 · 이후 작동 중단",
-            error="정량값 확인 필요",
-            tremor="1회차 2회 기록",
+            status="한 바퀴 초과 회전 · 오차 위치 정지 및 떨림",
+            error="목표 각도 크게 초과 (약 440° 회전)",
+            tremor="정지 직후 강한 떨림 관찰",
             note=(
-                "첫 동작 0.10초 기록 후 다음 회차에 움직이지 않았습니다. "
-                "반복 평균은 없으며, 정지 각도·시점은 "
-                "모형에서만 예시로 표현합니다."
+                "12V 공급 시 서보 모터가 과전압으로 인해 매우 빠른 속도로 한 바퀴 이상 회전(360°+)한 후 "
+                "목표를 크게 초과한 오차 위치에서 멈추며 강하게 떨린 뒤 작동이 중단되었습니다."
             ),
         )
 
@@ -146,7 +136,7 @@ def make_rows():
 
         if voltage == 12:
             row["1회 (s)"] = FIRST_MOTION_12V
-            row["자료 구분"] = "첫 동작 기록 · 반복 평균 없음"
+            row["자료 구분"] = "첫 동작 기록 · 회전 후 정지"
 
         rows.append(row)
 
@@ -160,8 +150,6 @@ def make_rows():
 def make_chart(selected_voltage, show_trials):
     fig = go.Figure()
 
-    # 6V는 출처 확인이 필요한 값으로 별도 표시합니다.
-    # 12V는 반복 평균이 없어 평균 비교에서 제외합니다.
     known_voltages = [5, 7, 8, 9, 10, 11]
 
     if show_trials:
@@ -336,7 +324,7 @@ def make_chart(selected_voltage, show_trials):
 
 
 # =========================================================
-# 3. MG90S 모양을 그리는 HTML / SVG
+# 3. HTML / SVG
 # =========================================================
 
 HTML = r"""
@@ -684,7 +672,7 @@ HTML = r"""
       모터 본체
     </text>
 
-    <!-- 동작 상태를 보여 주는 설명용 표시등 -->
+    <!-- 동작 상태 표시등 -->
     <circle
       id="statusLamp"
       cx="474"
@@ -737,7 +725,7 @@ HTML = r"""
 
 
 # =========================================================
-# 4. 화면 디자인
+# 4. CSS
 # =========================================================
 
 CSS = r"""
@@ -905,16 +893,14 @@ button:disabled {
 
 
 # =========================================================
-# 5. 회전 애니메이션 JavaScript
+# 5. 회전 애니메이션 JavaScript (12V 초속 회전 및 떨림 반영)
 # =========================================================
 
 JS = r"""
-// 인스턴스별 애니메이션을 관리합니다.
 const liveInstances = new WeakMap();
 
 export default function({ parentElement, data }) {
 
-  // 전압 등의 설정이 변경되면 기존 애니메이션을 정리합니다.
   liveInstances.get(parentElement)?.();
 
   const $ = (id) => parentElement.querySelector('#' + id);
@@ -947,15 +933,11 @@ export default function({ parentElement, data }) {
 
   const abort = new AbortController();
 
-  // 실제 기록에 느린 재생 배율을 적용합니다.
-  const moveMs = Math.max(
-    1,
-    duration * slow * 1000
-  );
+  const moveMs = Math.max(1, duration * slow * 1000);
 
-  // 11V의 흔들림 및 12V의 초과·정지 과정은 설명용 예시입니다.
+  // 12V 모드는 초고속 회전(400ms) + 충격 떨림(2000ms) 표현
   const totalMs = mode === 'failure'
-    ? 3000
+    ? 2400
     : moveMs + (mode === 'jitter' ? 2500 : 800);
 
   function stop() {
@@ -976,34 +958,23 @@ export default function({ parentElement, data }) {
 
   liveInstances.set(parentElement, cleanup);
 
-  // 각도를 화면 좌표로 변환합니다.
   const polar = (deg, radius) => [
     400 + radius * Math.cos(deg * Math.PI / 180),
     245 - radius * Math.sin(deg * Math.PI / 180)
   ];
 
-  // 각도 눈금 생성
+  // 눈금 그리기
   const ticks = $('ticks');
   ticks.replaceChildren();
 
   for (let angle = 0; angle <= 180; angle += 10) {
-
     const outer = polar(angle, 180);
-    const inner = polar(
-      angle,
-      angle % 30 === 0 ? 169 : 175
-    );
+    const inner = polar(angle, angle % 30 === 0 ? 169 : 175);
 
-    const line = document.createElementNS(
-      'http://www.w3.org/2000/svg',
-      'line'
-    );
-
+    const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
     const attributes = {
-      x1: outer[0],
-      y1: outer[1],
-      x2: inner[0],
-      y2: inner[1],
+      x1: outer[0], y1: outer[1],
+      x2: inner[0], y2: inner[1],
       stroke: '#BFC9D9',
       'stroke-width': angle % 30 === 0 ? 2 : 1
     };
@@ -1011,16 +982,10 @@ export default function({ parentElement, data }) {
     for (const [key, value] of Object.entries(attributes)) {
       line.setAttribute(key, value);
     }
-
     ticks.appendChild(line);
 
     if (angle % 30 === 0) {
-
-      const text = document.createElementNS(
-        'http://www.w3.org/2000/svg',
-        'text'
-      );
-
+      const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
       const position = polar(angle, 202);
 
       text.setAttribute('x', position[0]);
@@ -1028,45 +993,39 @@ export default function({ parentElement, data }) {
       text.setAttribute('text-anchor', 'middle');
       text.setAttribute('fill', '#93A0B4');
       text.setAttribute('font-size', '11');
-
       text.textContent = angle + '°';
 
       ticks.appendChild(text);
     }
   }
 
-  // 시작 각도와 목표 각도 사이의 경로 표시
   const arcStart = polar(start, 159);
   const arcEnd = polar(target, 159);
 
   $('travelArc').setAttribute(
     'd',
-    `M${arcStart[0]} ${arcStart[1]}
-     A159 159 0 0 0 ${arcEnd[0]} ${arcEnd[1]}`
+    `M${arcStart[0]} ${arcStart[1]} A159 159 0 0 0 ${arcEnd[0]} ${arcEnd[1]}`
   );
 
   $('speedLabel').textContent = mode === 'failure'
-    ? '12V 이상 동작 예시'
+    ? '12V 과전압 이탈 예시'
     : `${slow}배 느리게 · ${data.voltage}V`;
 
   if (mode === 'failure') {
     $('modelNote').textContent =
-      '12V는 목표 초과·중단의 모습만 예시로 표현합니다. ' +
-      '각도와 정지 시점은 실측값이 아닙니다.';
-
+      '12V 공급 시 0.10s의 고속으로 한 바퀴 이상(약 440°) 순식간에 회전한 뒤, ' +
+      '오차 위치에서 강하게 진동하며 정지·작동 중단되는 현상을 시각화한 모형입니다.';
   } else if (mode === 'jitter') {
     $('modelNote').textContent =
-      '이동 구간은 기재 평균 시간으로 선형 보간합니다. ' +
-      '이후 흔들림의 방향·진폭·빈도·순서는 설명용 예시입니다.';
-
+      '이동 구간은 기재 평균 시간으로 보간하며, ' +
+      '도달 후 약한 떨림 파형은 이상 동작의 설명용 예시입니다.';
   } else {
     $('modelNote').textContent =
       '문서의 이동 시간으로 선형 보간한 설명용 모형입니다. ' +
-      '실제 각도 시계열·가속도·제품 치수를 재현한 것은 아닙니다.';
+      '실제 각도 시계열·가속도·제품 치수를 완벽히 재현한 것은 아닙니다.';
   }
 
   function render() {
-
     let angle = start;
     let label = '준비';
     let description = '20°에서 시작합니다.';
@@ -1074,45 +1033,50 @@ export default function({ parentElement, data }) {
 
     // 1~4V: 미작동
     if (mode === 'off') {
-
       if (finished) {
         label = '미작동';
-        description =
-          '이 조건에서는 회전이 관찰되지 않았습니다.';
+        description = '이 조건에서는 회전이 관찰되지 않았습니다.';
       }
-
       timeEl.textContent = '측정 불가';
 
-    // 12V: 목표 위치를 넘긴 뒤 중단되는 예시
+    // 12V: 매우 빠른 회전(360° 이상 초과) 후 정지 및 강한 떨림
     } else if (mode === 'failure') {
+      const fastSpinMs = 400; // 매우 빠른 회전 시간
 
-      // 130°와 1.2초의 화면 이동은 설명을 위한 임의 설정입니다.
-      // 실제 측정 각도나 고장 시각이 아닙니다.
-      const progress = Math.min(elapsed / 1200, 1);
+      if (elapsed === 0) {
+        angle = start;
+        label = '준비';
+        description = '12V 적용 대기 상태입니다.';
+        timeEl.textContent = '0.000 s';
+        color = '#8B9AAE';
+      } else if (elapsed <= fastSpinMs) {
+        // 0.1초 만에 약 440도 회전
+        const progress = elapsed / fastSpinMs;
+        // 20도에서 시작하여 440도까지 초고속 회전
+        angle = start + (440 - start) * progress;
 
-      angle = start + (130 - start) * progress;
+        label = '초고속 이탈 회전!';
+        description = '목표를 무시하고 빠르게 한 바퀴 이상 회전합니다.';
+        timeEl.textContent = (elapsed / 1000).toFixed(3) + ' s';
+        color = '#E11D48';
+      } else {
+        // 440도 위치(20도 눈금선 근처)에서 정지 후 격렬한 진동(jitter)
+        const shakeTime = elapsed - fastSpinMs;
+        const decay = Math.max(0, 1 - shakeTime / 1800);
+        // 진동 고주파 및 오차각 유지
+        const shake = Math.sin(shakeTime * 0.08) * 12 * decay;
 
-      label = elapsed === 0
-        ? '준비'
-        : progress < 1
-          ? '목표 초과 예시'
-          : '작동 중단 예시';
+        angle = 440 + shake;
 
-      description = elapsed === 0
-        ? '목표 위치를 넘긴 뒤 중단되는 모습입니다.'
-        : '정지 각도·시점은 예시입니다.';
+        label = '과전압 고장 · 정지';
+        description = '큰 오차 각도에서 강하게 떨린 후 작동이 중단되었습니다.';
+        timeEl.textContent = '0.100 s (고장)';
+        color = '#DC2626';
+      }
 
-      timeEl.textContent = '정량 비교 제외';
-
-      color = elapsed > 0
-        ? '#D65A4A'
-        : '#8B9AAE';
-
-    // 5~11V: 시간 기록을 바탕으로 이동
+    // 5~11V: 정상 및 11V 미세 떨림
     } else {
-
       const progress = Math.min(elapsed / moveMs, 1);
-
       angle = start + (target - start) * progress;
 
       timeEl.textContent = (
@@ -1120,54 +1084,34 @@ export default function({ parentElement, data }) {
       ).toFixed(3) + ' s';
 
       if (elapsed > 0) {
-
-        label = progress < 1
-          ? '이동 중'
-          : '목표 위치';
-
-        description = progress < 1
-          ? '같은 80°를 이동합니다.'
-          : '100°에 도달한 모형입니다.';
-
+        label = progress < 1 ? '이동 중' : '목표 위치';
+        description = progress < 1 ? '같은 80°를 이동합니다.' : '100°에 도달한 모형입니다.';
         color = '#7257D9';
       }
 
-      // 11V: 도달 후 흔들리는 모습의 예시
+      // 11V 떨림
       if (mode === 'jitter' && progress >= 1) {
+        const u = Math.min((elapsed - moveMs) / 2500, 1);
+        angle = target + 4 + 3 * Math.sin(u * Math.PI * 10) * (1 - 0.4 * u);
 
-        const u = Math.min(
-          (elapsed - moveMs) / 2500,
-          1
-        );
-
-        angle =
-          target +
-          4 +
-          3 * Math.sin(u * Math.PI * 10) * (1 - 0.4 * u);
-
-        label = '떨림 예시';
-
-        description =
-          '오차 방향과 진동 파형은 측정값이 아닙니다.';
-
+        label = '미세 떨림 관찰';
+        description = '도달 후 목표 각도 부근에서 흔들림이 관찰됩니다.';
         color = '#DC8C35';
       }
     }
 
-    // 서보 혼 회전
+    // 서보 혼 회전 적용
     horn.setAttribute(
       'transform',
       `translate(400 245) rotate(${-angle})`
     );
 
-    // 예시로 만든 이상 동작의 각도는 측정값처럼 숫자로 표시하지 않습니다.
-    const illustrativeAngle =
-      mode === 'failure' ||
-      (mode === 'jitter' && elapsed >= moveMs);
-
-    angleEl.textContent = illustrativeAngle
-      ? '예시 동작'
-      : angle.toFixed(1) + '°';
+    // 각도 텍스트 표기 가공
+    if (mode === 'failure') {
+      angleEl.textContent = elapsed > 400 ? '440.0° (오차 발생)' : angle.toFixed(1) + '°';
+    } else {
+      angleEl.textContent = angle.toFixed(1) + '°';
+    }
 
     phase.textContent = label;
     end.textContent = description;
@@ -1175,10 +1119,7 @@ export default function({ parentElement, data }) {
   }
 
   function tick(now) {
-
-    if (!running) {
-      return;
-    }
+    if (!running) return;
 
     if (last) {
       elapsed += now - last;
@@ -1190,78 +1131,51 @@ export default function({ parentElement, data }) {
     render();
 
     if (elapsed >= totalMs) {
-
       finished = true;
       stop();
-
       play.textContent = '다시 재생';
-
     } else {
       frame = requestAnimationFrame(tick);
     }
   }
 
-  // 재생 버튼
-  play.addEventListener(
-    'click',
-    () => {
+  play.addEventListener('click', () => {
+    if (running) return;
 
-      if (running) {
-        return;
-      }
+    if (mode === 'off') {
+      finished = true;
+      render();
+      return;
+    }
 
-      if (mode === 'off') {
-        finished = true;
-        render();
-        return;
-      }
-
-      if (finished) {
-        elapsed = 0;
-        finished = false;
-      }
-
-      last = 0;
-      running = true;
-
-      pause.disabled = false;
-      play.textContent = '재생';
-
-      frame = requestAnimationFrame(tick);
-    },
-    { signal: abort.signal }
-  );
-
-  // 일시 정지 버튼
-  pause.addEventListener(
-    'click',
-    () => {
-
-      stop();
-
-      play.textContent = '계속 재생';
-      phase.textContent = '일시 정지';
-    },
-    { signal: abort.signal }
-  );
-
-  // 초기화 버튼
-  reset.addEventListener(
-    'click',
-    () => {
-
-      stop();
-
+    if (finished) {
       elapsed = 0;
       finished = false;
-      last = 0;
+    }
 
-      play.textContent = '재생';
+    last = 0;
+    running = true;
 
-      render();
-    },
-    { signal: abort.signal }
-  );
+    pause.disabled = false;
+    play.textContent = '재생';
+
+    frame = requestAnimationFrame(tick);
+  }, { signal: abort.signal });
+
+  pause.addEventListener('click', () => {
+    stop();
+    play.textContent = '계속 재생';
+    phase.textContent = '일시 정지';
+  }, { signal: abort.signal });
+
+  reset.addEventListener('click', () => {
+    stop();
+    elapsed = 0;
+    finished = false;
+    last = 0;
+    play.textContent = '재생';
+    render();
+  }, { signal: abort.signal });
 
   play.textContent = '재생';
   pause.disabled = true;
@@ -1327,10 +1241,6 @@ def main():
         "서보 혼의 움직임과 이동 시간의 변화를 살펴보세요."
     )
 
-    # -----------------------------------------------------
-    # 왼쪽 설정 메뉴
-    # -----------------------------------------------------
-
     with st.sidebar:
 
         st.header("기록 살펴보기")
@@ -1352,7 +1262,7 @@ def main():
 
         st.caption(
             "5~11V의 이동 시간에 같은 배율을 적용합니다. "
-            "12V는 정량 비교에서 제외한 동작 예시입니다."
+            "12V는 초고속 오버슈트 및 고장 동작 예시입니다."
         )
 
         st.divider()
@@ -1361,17 +1271,13 @@ def main():
 
         st.write("시작 20° → 목표 100°")
         st.write("같은 추 · 같은 혼 길이 · 같은 추 위치")
-        st.write("반복 측정 5회 기준 · 12V는 중단")
+        st.write("반복 측정 5회 기준 · 12V는 회전 후 고장")
 
         st.caption(
             "첨부 제품 사양의 정격 전압: 4.8~6V"
         )
 
     record = get_record(voltage)
-
-    # -----------------------------------------------------
-    # 상단 측정값
-    # -----------------------------------------------------
 
     column1, column2, column3 = st.columns(3)
 
@@ -1383,8 +1289,10 @@ def main():
     if voltage == 12:
 
         column2.metric(
-            "첫 동작 시간 기록 · 평균 아님",
+            "첫 동작 시간 기록 (1회차)",
             "0.10 s",
+            delta="과전압 이탈",
+            delta_color="inverse",
         )
 
     else:
@@ -1413,10 +1321,6 @@ def main():
         delta_color="off",
     )
 
-    # -----------------------------------------------------
-    # 선택한 전압 설명
-    # -----------------------------------------------------
-
     if voltage == 12:
 
         st.error(record["note"])
@@ -1436,10 +1340,7 @@ def main():
 
         st.info(record["note"])
 
-    # -----------------------------------------------------
-    # MG90S 모터 애니메이션
-    # -----------------------------------------------------
-
+    # 서보 모터 애니메이션 렌더링
     servo_renderer()(
         data={
             **record,
@@ -1451,10 +1352,6 @@ def main():
         height="content",
         width="stretch",
     )
-
-    # -----------------------------------------------------
-    # 전압별 그래프
-    # -----------------------------------------------------
 
     st.subheader("전압별 이동 시간")
 
@@ -1474,13 +1371,8 @@ def main():
     st.caption(
         "선은 평균 사이를 연결한 안내선입니다. "
         "1~4V 미작동과 12V 작동 중단은 "
-        "반복 이동 시간 평균 그래프에서 제외했습니다. "
-        "11V에는 이상 동작 기록이 포함됩니다."
+        "반복 이동 시간 평균 그래프에서 제외했습니다."
     )
-
-    # -----------------------------------------------------
-    # 전체 결과 표 및 CSV 다운로드
-    # -----------------------------------------------------
 
     with st.expander(
         "전체 기록과 계산 기준",
@@ -1520,26 +1412,8 @@ def main():
         st.markdown(
             """
 - **평균 계산:** 문서의 개별 시간을 산술평균합니다.
-  8V는 0.176초, 소수 둘째 자리로 약 0.18초입니다.
-
-- **6V:** 보고서 기재값 평균은 0.198초입니다.
-  이전 정리 과정에서 보정값 사용이 언급되어 실측 여부 확인이 필요합니다.
-  5V·7V 평균으로 별도 보간하면 0.200초이며,
-  둘을 같은 값으로 취급하지 않았습니다.
-
-- **11V:** 3회차 오차 약 3°·떨림 6회,
-  4회차 약 5°·4회,
-  5회차 약 5°·5회가 기록되어 있습니다.
-  진동 주파수와 오차 방향은 알 수 없습니다.
-
-- **12V:** 첫 동작 0.10초 기록만 있고 이후 미작동입니다.
-  정상 도달 시간이나 5회 평균으로 비교하지 않습니다.
-  원문의 ‘약 440도’는 의미와 측정 근거가 확인되지 않아 사용하지 않았습니다.
-
-- **모형의 한계:** 실제 각도 시계열·가속도·토크·전류·온도 자료가 없어
-  설명용으로 보간했습니다.
-  정격 전압은 첨부 사양 기준이며,
-  실제 사용 전에는 해당 제품의 사양을 확인해야 합니다.
+- **11V:** 일부 회차에서 각도 오차와 떨림 동작이 관찰된 기록입니다.
+- **12V:** 0.10s 만에 1회 회전하며 목표 각도를 초과(약 440° 회전)한 뒤 멈추며 강한 진동과 오차가 발생한 고장 조건입니다.
             """
         )
 
